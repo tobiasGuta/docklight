@@ -1,0 +1,37 @@
+{
+  "name": "docklight",
+  "displayName": "Docklight",
+  "description": "A lightweight, read-only Docker dashboard for Visual Studio Code.",
+  "version": "0.1.0",
+  "publisher": "tobiasGuta",
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": ["Other"],
+  "extensionKind": ["ui"],
+  "activationEvents": ["onCommand:docklight.openDashboard"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "docklight.openDashboard",
+        "title": "Open Dashboard",
+        "category": "Docklight"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "check": "tsc --noEmit -p .",
+    "test": "npm run compile && node --test test/*.test.mjs",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.96.0",
+    "@vscode/vsce": "^3.6.0",
+    "typescript": "^5.8.3"
+  }
+}
