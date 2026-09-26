@@ -4,8 +4,9 @@ import { createRequire } from 'node:module';
 import Module from 'node:module';
 
 const require = createRequire(import.meta.url);
+const flush = () => new Promise((resolve) => setImmediate(resolve));
 
-function setup() {
+function setup(getInventory = async () => ({ containers: [], counts: { containers: 0, running: 0, stopped: 0, images: 0, networks: 0, volumes: 0 }, capturedAt: new Date().toISOString() })) {
   const panels = [];
   let command;
   const vscode = {
@@ -15,15 +16,14 @@ function setup() {
     window: {
       createWebviewPanel: () => {
         const panel = {
-          reveals: 0,
-          disposed: false,
-          sent: [],
+          reveals: 0, disposed: false, visible: true, sent: [],
           webview: {
             cspSource: 'vscode-webview-resource:',
             asWebviewUri: (uri) => uri.path,
             onDidReceiveMessage(callback) { panel.receive = callback; return { dispose() {} }; },
             postMessage(message) { panel.sent.push(message); return Promise.resolve(true); },
           },
+          onDidChangeViewState(callback) { panel.onChange = callback; return { dispose() {} }; },
           onDidDispose(callback) { panel.onDispose = callback; return { dispose() {} }; },
           reveal() { this.reveals += 1; },
           dispose() { this.disposed = true; this.onDispose?.(); },
@@ -35,7 +35,9 @@ function setup() {
   };
   const originalLoad = Module._load;
   Module._load = function(request, parent, isMain) {
-    return request === 'vscode' ? vscode : originalLoad.call(this, request, parent, isMain);
+    if (request === 'vscode') return vscode;
+    if (request === './docker' && parent?.filename.endsWith('/out/extension.js')) return { getInventory };
+    return originalLoad.call(this, request, parent, isMain);
   };
   let extension;
   try {
@@ -49,10 +51,10 @@ function setup() {
   return { extension, context, panels, open: () => command() };
 }
 
-test('opens one Webview with a restrictive CSP and no Docker execution', () => {
-  const app = setup();
+test('one Webview, strict CSP, validated read-only messages, and successful inventory', async () => {
+  let calls = 0;
+  const app = setup(async () => { calls++; return { containers: [], counts: { containers: 0 }, capturedAt: '2026-09-26T21:00:00Z' }; });
   app.open();
-  assert.equal(app.panels.length, 1);
   const panel = app.panels[0];
   assert.match(panel.webview.html, /default-src 'none'/);
   assert.match(panel.webview.html, /connect-src 'none'/);
@@ -64,10 +66,50 @@ test('opens one Webview with a restrictive CSP and no Docker execution', () => {
   panel.receive({ type: 'start', containerId: 'abc' });
   assert.equal(panel.sent.length, 0);
   panel.receive({ type: 'ready' });
-  assert.deepEqual(panel.sent, [{ type: 'bootstrap', mode: 'scaffold' }]);
+  await flush();
+  assert.equal(calls, 1);
+  assert.deepEqual(panel.sent.map((m) => m.type), ['loading', 'inventory']);
+  panel.receive({ type: 'refresh' });
+  await flush();
+  assert.equal(calls, 2);
   panel.dispose();
   app.open();
   assert.equal(app.panels.length, 2);
   app.extension.deactivate();
   assert.equal(app.panels[1].disposed, true);
+});
+
+test('hiding aborts in-flight work and resumes with a fresh inventory when shown', async () => {
+  const requests = [];
+  const app = setup((_run, signal) => new Promise((resolve, reject) => {
+    requests.push({ resolve, reject, signal });
+    signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true });
+  }));
+  app.open();
+  const panel = app.panels[0];
+  panel.receive({ type: 'ready' });
+  assert.equal(requests.length, 1);
+  panel.visible = false;
+  panel.onChange();
+  assert.equal(requests[0].signal.aborted, true);
+  panel.visible = true;
+  panel.onChange();
+  await flush();
+  assert.equal(requests.length, 2);
+  assert.equal(panel.sent.filter((m) => m.type === 'error').length, 0);
+  requests[1].resolve({ containers: [], counts: {}, capturedAt: '' });
+  await flush();
+  assert.equal(panel.sent.filter((m) => m.type === 'inventory').length, 1);
+  panel.dispose();
+});
+
+test('reports daemon failures without issuing management actions', async () => {
+  const app = setup(async () => { throw new Error('permission denied'); });
+  app.open();
+  const panel = app.panels[0];
+  panel.receive({ type: 'ready' });
+  await flush();
+  assert.equal(panel.sent.at(-1).type, 'error');
+  assert.match(panel.sent.at(-1).message, /permission denied/);
+  panel.dispose();
 });

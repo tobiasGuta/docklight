@@ -1,8 +1,10 @@
 import * as vscode from 'vscode';
 import { randomBytes } from 'node:crypto';
+import { getInventory } from './docker';
 import { parseWebviewMessage } from './protocol';
 
 let dashboardPanel: vscode.WebviewPanel | undefined;
+let activeController: AbortController | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   const openDashboard = vscode.commands.registerCommand('docklight.openDashboard', () => {
@@ -23,23 +25,68 @@ export function activate(context: vscode.ExtensionContext): void {
     );
 
     dashboardPanel = panel;
+    let disposed = false;
+    let pendingRefresh = false;
+
+    const refresh = async (): Promise<void> => {
+      if (disposed) {
+        return;
+      }
+      if (activeController) {
+        if (activeController.signal.aborted) pendingRefresh = true;
+        return;
+      }
+      const controller = new AbortController();
+      activeController = controller;
+      void panel.webview.postMessage({ type: 'loading' });
+      try {
+        const snapshot = await getInventory(undefined, controller.signal);
+        if (!disposed && !controller.signal.aborted && panel.visible) {
+          void panel.webview.postMessage({ type: 'inventory', snapshot });
+        }
+      } catch (error) {
+        if (!disposed && !controller.signal.aborted && panel.visible) {
+          const message = error instanceof Error ? error.message : 'Could not read the local Docker Engine.';
+          void panel.webview.postMessage({ type: 'error', message });
+        }
+      } finally {
+        if (activeController === controller) {
+          activeController = undefined;
+        }
+        if (pendingRefresh && !disposed && panel.visible) {
+          pendingRefresh = false;
+          void refresh();
+        }
+      }
+    };
 
     const messageSubscription = panel.webview.onDidReceiveMessage((raw: unknown) => {
       const message = parseWebviewMessage(raw);
-      if (message?.type === 'ready') {
-        void panel.webview.postMessage({ type: 'bootstrap', mode: 'scaffold' });
+      if (message?.type === 'ready' || message?.type === 'refresh') {
+        void refresh();
+      }
+    });
+
+    const stateSubscription = panel.onDidChangeViewState(() => {
+      if (!panel.visible) {
+        activeController?.abort();
+      } else {
+        void refresh();
       }
     });
 
     const disposeSubscription = panel.onDidDispose(() => {
+      disposed = true;
+      activeController?.abort();
       if (dashboardPanel === panel) {
         dashboardPanel = undefined;
       }
       messageSubscription.dispose();
+      stateSubscription.dispose();
       disposeSubscription.dispose();
     });
 
-    // Register the message listener before loading HTML so the ready handshake cannot race it.
+    // Listen before loading HTML: the ready handshake must not race registration.
     panel.webview.html = createDashboardHtml(panel.webview, context.extensionUri);
   });
 
@@ -47,6 +94,7 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 export function deactivate(): void {
+  activeController?.abort();
   dashboardPanel?.dispose();
   dashboardPanel = undefined;
 }
@@ -87,26 +135,35 @@ function createDashboardHtml(webview: vscode.Webview, extensionUri: vscode.Uri):
     </header>
     <main>
       <section class="welcome" aria-labelledby="welcome-title">
-        <div><span class="eyebrow">PHASE 2 · EXTENSION SCAFFOLD</span>
+        <div><span class="eyebrow">LOCAL ENGINE · READ-ONLY</span>
           <h2 id="welcome-title">Your Docker workspace, in one place.</h2>
           <p id="extension-status" role="status" aria-live="polite">Connecting to extension host…</p>
-          <p id="status-detail" class="hint">This version does not access Docker or change any resources.</p>
+          <p id="status-detail" class="hint">Reading the global container inventory.</p>
         </div>
         <span class="welcome-icon" aria-hidden="true">◈</span>
       </section>
       <section class="overview" aria-label="Resource overview">
-        <div class="metric"><span>Containers</span><strong>—</strong><small>Inventory in Phase 3</small></div>
-        <div class="metric"><span>Images</span><strong>—</strong><small>Inventory in Phase 3</small></div>
-        <div class="metric"><span>Networks</span><strong>—</strong><small>Inventory in Phase 3</small></div>
-        <div class="metric"><span>Volumes</span><strong>—</strong><small>Inventory in Phase 3</small></div>
+        <div class="metric"><span>Running</span><strong id="count-running">—</strong><small id="count-running-detail">Containers</small></div>
+        <div class="metric"><span>Stopped / other</span><strong id="count-stopped">—</strong><small>Containers</small></div>
+        <div class="metric"><span>Images</span><strong id="count-images">—</strong><small>Unique image IDs</small></div>
+        <div class="metric"><span>Networks</span><strong id="count-networks">—</strong><small>Docker networks</small></div>
+        <div class="metric"><span>Volumes</span><strong id="count-volumes">—</strong><small>Docker volumes</small></div>
       </section>
-      <section class="empty-state" aria-labelledby="empty-title">
-        <div class="empty-symbol" aria-hidden="true">▣</div>
-        <h2 id="empty-title">Container inventory is coming next</h2>
-        <p>The next phase adds global container listing, Compose grouping, health, and search.</p>
+      <section class="inventory" aria-labelledby="inventory-heading">
+        <div class="inventory-heading"><div><h2 id="inventory-heading">Containers <span id="container-total">—</span></h2>
+          <p>All Compose projects and standalone containers on this local Engine.</p></div>
+          <button id="refresh" type="button" title="Refresh container inventory">↻ Refresh</button>
+        </div>
+        <div class="toolbar">
+          <label class="search-wrap"><span class="sr-only">Search containers</span><input id="search" type="search" placeholder="Search name, image, project, or service…" autocomplete="off" /></label>
+          <label class="filter-wrap"><span class="sr-only">Filter containers</span><select id="filter"><option value="all">All states</option><option value="running">Running</option><option value="stopped">Stopped / other</option><option value="unhealthy">Unhealthy</option></select></label>
+        </div>
+        <p id="error-message" class="error-message" role="alert" hidden></p>
+        <div id="groups" class="groups" aria-live="polite"></div>
+        <p id="empty-message" class="empty-state">Waiting for container inventory…</p>
       </section>
     </main>
-    <footer>LOCAL ONLY <span aria-hidden="true">·</span> NO TELEMETRY <span aria-hidden="true">·</span> NO DOCKER OPERATIONS IN THIS PHASE</footer>
+    <footer>LOCAL UNIX SOCKET <span aria-hidden="true">·</span> NO TELEMETRY <span aria-hidden="true">·</span> READ-ONLY <span aria-hidden="true">·</span> MANUAL REFRESH</footer>
   </div>
   <script nonce="${nonce}" src="${script}"></script>
 </body>
