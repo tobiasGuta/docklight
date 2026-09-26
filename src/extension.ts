@@ -23,7 +23,6 @@ export function activate(context: vscode.ExtensionContext): void {
     );
 
     dashboardPanel = panel;
-    panel.webview.html = createDashboardHtml(panel.webview, context.extensionUri);
 
     const messageSubscription = panel.webview.onDidReceiveMessage((raw: unknown) => {
       const message = parseWebviewMessage(raw);
@@ -39,6 +38,9 @@ export function activate(context: vscode.ExtensionContext): void {
       messageSubscription.dispose();
       disposeSubscription.dispose();
     });
+
+    // Register the message listener before loading HTML so the ready handshake cannot race it.
+    panel.webview.html = createDashboardHtml(panel.webview, context.extensionUri);
   });
 
   context.subscriptions.push(openDashboard);
