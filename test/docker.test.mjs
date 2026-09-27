@@ -57,6 +57,10 @@ test('projects health, exact Compose labels, true published ports, and safe time
   assert.equal(stopped.project, null);
   assert.deepEqual(stopped.publishedPorts, []);
   assert.doesNotMatch(INSPECT_TEMPLATE, /Config\.Env|Mountpoint|HostConfig/);
+  // Docker 29 can omit State.Health entirely when no HEALTHCHECK is configured.
+  // Dotted lookup fails even inside an if expression in Docker's template mode.
+  assert.match(INSPECT_TEMPLATE, /\{\{with index \.State "Health"\}\}/);
+  assert.doesNotMatch(INSPECT_TEMPLATE, /\.State\.Health/);
   assert.match(INSPECT_TEMPLATE, /com\.docker\.compose\.project/);
   assert.match(INSPECT_TEMPLATE, /com\.docker\.compose\.service/);
 });
