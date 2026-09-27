@@ -16,7 +16,7 @@ export const INSPECT_TEMPLATE = [
   '"image":{{json .Config.Image}}',
   '"state":{{json .State.Status}}',
   '"startedAt":{{json .State.StartedAt}}',
-  '"health":{{if .State.Health}}{{json .State.Health.Status}}{{else}}""{{end}}',
+  '"health":{{with index .State "Health"}}{{json .Status}}{{else}}""{{end}}',
   '"ports":{{json .NetworkSettings.Ports}}',
   '"project":{{with .Config.Labels}}{{with index . "com.docker.compose.project"}}{{json .}}{{else}}""{{end}}{{else}}""{{end}}',
   '"service":{{with .Config.Labels}}{{with index . "com.docker.compose.service"}}{{json .}}{{else}}""{{end}}{{else}}""{{end}}}',
