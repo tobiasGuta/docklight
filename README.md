@@ -1,63 +1,54 @@
 # Docklight
 
-A small, locally installed, read-only Docker inventory inside a full VS Code editor tab. **Phase 3** reads the existing Fedora Docker Engine across **all workspaces**, groups containers using Compose project labels, and provides a midnight-inspired, theme-aware interface. No Docker Desktop, additional service, or third-party VS Code extension is required.
+A small, locally installed, **read-only** Docker dashboard in a full VS Code editor tab. It uses your existing local Docker Engine on Fedora and shows containers across **all VS Code workspaces**. No Docker Desktop, separate backend, network socket, or dependency on another VS Code extension.
 
-## Features in this phase
+## Current features (Phase 4 / v0.3.0)
 
-- All running and stopped containers, grouped by `com.docker.compose.project`; unlabeled containers appear under **Standalone containers**.
-- Container name, image, running state, health, running uptime, service name, and **published** host ports.
-- Client-side search and All / Running / Stopped / Unhealthy filters.
-- Overview counts of running/stopped containers, unique image IDs, networks, and volumes.
-- Manual Refresh; a new inventory is also requested on dashboard activation and when the editor tab becomes visible again.
-- Bounded, abortable Docker CLI subprocesses; no background daemon or resource polling.
+- Global inventory of running and stopped containers grouped by the canonical `com.docker.compose.project` label; unlabeled containers appear as **Standalone containers**.
+- Container name, image, state, health, running uptime, Compose service, and published host ports.
+- Search, status filtering, manual refresh, and summary counts of unique images, networks, and volumes.
+- Select a container to inspect its full ID and the fields above; **no full Docker inspect response or environment variables are forwarded to the Webview**.
+- CPU percentage, memory usage, and memory percentage for the **selected running container only**, sampled using `docker container stats --no-stream --format json` approximately every 10 seconds while visible. No history, charts, or stats for stopped containers.
+- Recent logs on explicit request, last 200 entries and at most 256 KiB, with a manual refresh button. No log following, background retrieval, or storage.
 
-**Not yet implemented:** container detail inspector, live CPU/memory, logs, resource browsing, container operations, remote contexts, or historical data. Those are separate scope decisions for subsequent phases.
+**Not included:** create/start/stop/delete, prune, build, terminal, registry authentication, Kubernetes, remote contexts, historical charts, automatic log streaming, or telemetry. The resource-count cards are summaries, not inventory browsers.
 
-## Get started on Fedora
+## Use on Fedora
 
 ```bash
-cd /mnt/Development/Tools
-# On a new machine, clone first: git clone https://github.com/tobiasGuta/docklight.git
-cd docklight
+cd /mnt/Development/Tools/docklight
 git pull --ff-only
 npm install
 npm test
 code .
 ```
 
-Press **F5** (or **Ctrl+F5** if your VS Code debugger pauses the Extension Development Host), then run **Docklight: Open Dashboard** in the new window's Command Palette. You should see the inventory from all local projects, including stopped containers. Switch to another workspace: the dashboard still shows the same local Engine. Click Refresh after a Docker change.
+Press **F5** (or **Ctrl+F5** if the debugger stalls) and run **Docklight: Open Dashboard** in the Extension Development Host. Click any container row to open its details section. Resource values begin loading for running containers; click **Load recent logs** if needed. Switch containers, hide the tab, or close it to cancel outstanding monitoring.
 
-The CLI is required in the **local VS Code extension host PATH**. Docklight explicitly uses `unix:///var/run/docker.sock` regardless of the active Docker CLI context or workspace. It does not change the Engine's data-root, containerd settings, or storage.
-
-Verify the local endpoint if the dashboard reports an error:
+Docklight explicitly targets `unix:///var/run/docker.sock` in the **local VS Code UI extension host**, independently of the current workspace or Docker CLI context. If you use a nonstandard/rootless socket, v0.3.0 does not offer a custom socket setting; we can add a strictly local path configuration separately if your environment requires it. Don't change Docker Engine permissions or storage settings for Docklight.
 
 ```bash
 test -S /var/run/docker.sock && echo 'Local Docker socket exists'
 docker --host unix:///var/run/docker.sock container ls -a --format json
 ```
 
-A rootless or nonstandard UNIX socket is not configurable in v0.2.0. We can add a strictly local socket-path setting if your Engine actually uses one. **Do not grant additional daemon permissions just to fix a Docklight UI error.**
+## Security and operational limits
 
-## Security model
+- The extension host launches the existing Docker CLI with an argument vector, `shell: false`, no stdin, fixed local UNIX socket, and no inherited `DOCKER_HOST`/`DOCKER_CONTEXT` overrides. Webview messages are strictly allowlisted. An ID must be a full hexadecimal container ID **and be present in the latest inventory** before selection can trigger any Docker command.
+- Docker inspection is narrowly formatted to return only non-secret dashboard fields, including two exact Compose labels. No `Config.Env`, full inspect object, mountpoint, or other arbitrary container configuration is sent to the Webview.
+- Webview CSP denies default external resources and connections; daemon-provided names, metadata, errors, and logs use text rendering, never `innerHTML`. Assets are packaged locally.
+- Inventory commands have an 8-second timeout, bounded output, and batched inspection. Resource polling has at most one pending request for the selected container and waits 10 seconds after each sample. It stops when the tab is hidden or selection changes. Logs have an 8-second timeout and a combined 256 KiB stdout/stderr cap; overlong output is truncated, and retrieval is stopped. The order between stdout and stderr log streams is not guaranteed.
+- **Log text can contain credentials or other sensitive data.** Loading it is opt-in. Docklight doesn't automatically redact or persist logs; avoid sharing screenshots of sensitive output.
+- Read-only is enforced in extension code, **not** a daemon-enforced permission boundary. Ordinary rootful Docker access is privileged. A compromised local extension host is outside this MVP's security guarantees.
 
-- Docker execution happens only in the extension host using `spawn` with an argument array, `shell: false`, and a fixed local UNIX socket. `DOCKER_HOST` and `DOCKER_CONTEXT` are excluded from subprocess environment overrides.
-- The Webview accepts no arbitrary Docker commands. Its only messages are an exact `{ "type": "ready" }` or `{ "type": "refresh" }`; there is no mutation handler.
-- Container IDs are full 64-character hexadecimal strings from a JSON-formatted global listing; they are checked before being passed to a **read-only** `container inspect` command.
-- `docker container inspect --format` emits **only** ID, name, image, state, started time, health, published-port bindings, and the two Compose labels. Full inspect output and `Config.Env` are never passed to the Webview.
-- Resource summaries are counts only; images are deduplicated by ID. No volume mountpoints, container environment variables, or labels other than Compose project/service are displayed.
-- Webview CSP disallows default external resources, network connections, objects, and frames. Dynamic daemon text is rendered as `textContent`, not HTML. No external assets, analytics, or telemetry.
-- One outstanding inventory request at a time; processes have an 8-second per-command timeout and an 8 MiB stdout bound. Inspection is batched in groups of 50. Requests are aborted on hidden/disposed tabs. **No automatic periodic polling.**
-
-**Important limitation:** a normal user's access to a rootful Docker daemon is already a privileged capability. These read-only checks are an application-level policy, not a daemon-enforced security boundary. Do not install untrusted extensions or treat container-provided names/metadata as trusted input. CLI errors can disclose details about the local Engine to the local Webview. Docklight never exposes the socket through a network listener.
-
-## Developer commands
+## Development
 
 ```bash
-npm run check   # TypeScript, no output
-npm test        # compile + deterministic tests (mock Docker and Webview)
-npm run package # creates docklight-0.2.0.vsix; packaging/polish are Phase 5
+npm run check  # TypeScript
+npm test       # compile and deterministic tests with mocked Docker/Webview
+npm run package
 ```
 
-The automated tests use a mock Docker CLI and Webview. A **live-engine smoke test on your Fedora machine** is required before calling Phase 3 fully verified. If a running container is missing or grouping/ports are unexpected, send the dashboard screenshot and relevant **redacted** extension-host error; do not post environment variables or full inspect output.
+A live-engine smoke test on your Fedora machine is still necessary: select a running container, watch CPU/memory update, manually load recent logs, select a stopped container, and hide/reopen the tab. Automated tests do **not** prove behavior against the actual local Docker Engine or the live VS Code UI.
 
 No files in Reconductor or ParamIntel are involved.

@@ -136,3 +136,68 @@ test('Docker executable receives fixed UNIX socket and argument vector, not shel
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test('selected stats uses JSON and a validated full ID, with no streaming', async () => {
+  const { getContainerStats } = require('../out/docker.js');
+  const calls = [];
+  const result = await getContainerStats(first, async (args) => {
+    calls.push(args);
+    return JSON.stringify({ CPUPerc: '0.42%', MemUsage: '16.4MiB / 1GiB', MemPerc: '1.60%' }) + '\n';
+  });
+  assert.deepEqual(calls[0], ['container', 'stats', '--no-stream', '--format', 'json', first]);
+  assert.equal(result.cpuPercent, '0.42%');
+  assert.equal(result.memoryUsage, '16.4MiB / 1GiB');
+  assert.equal(result.memoryPercent, '1.60%');
+  await assert.rejects(getContainerStats('--all', async () => { throw new Error('should not execute'); }), /Invalid container ID/);
+  await assert.rejects(getContainerStats(first, async () => ''), /No statistics returned/);
+  await assert.rejects(getContainerStats(first, async () => '{"CPUPerc": 1}\n'), /invalid CPU/);
+});
+
+test('logs use fixed local socket, tail bound, no follow, and no environment overrides', async () => {
+  const { getContainerLogs } = require('../out/docker.js');
+  const directory = mkdtempSync(join(tmpdir(), 'docklight-log-test-'));
+  const executable = join(directory, 'docker');
+  writeFileSync(executable, `#!/usr/bin/env node
+process.stdout.write(JSON.stringify({args:process.argv.slice(2), host:process.env.DOCKER_HOST, context:process.env.DOCKER_CONTEXT}));
+`);
+  chmodSync(executable, 0o700);
+  const oldPath = process.env.PATH;
+  const oldHost = process.env.DOCKER_HOST;
+  const oldContext = process.env.DOCKER_CONTEXT;
+  try {
+    process.env.PATH = `${directory}:${oldPath}`;
+    process.env.DOCKER_HOST = 'tcp://remote-host';
+    process.env.DOCKER_CONTEXT = 'remote';
+    const result = JSON.parse((await getContainerLogs(first)).text);
+    assert.deepEqual(result.args, ['--host', 'unix:///var/run/docker.sock', 'container', 'logs', '--tail', '200', '--timestamps', first]);
+    assert.equal(result.host, undefined);
+    assert.equal(result.context, undefined);
+    await assert.rejects(getContainerLogs('--follow'), /Invalid container ID/);
+  } finally {
+    process.env.PATH = oldPath;
+    if (oldHost === undefined) delete process.env.DOCKER_HOST; else process.env.DOCKER_HOST = oldHost;
+    if (oldContext === undefined) delete process.env.DOCKER_CONTEXT; else process.env.DOCKER_CONTEXT = oldContext;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('logs are capped at 256 KiB and strip terminal escapes', async () => {
+  const { getContainerLogs } = require('../out/docker.js');
+  const directory = mkdtempSync(join(tmpdir(), 'docklight-log-cap-'));
+  const executable = join(directory, 'docker');
+  writeFileSync(executable, `#!/usr/bin/env node
+process.stdout.write('\\x1b[31m' + 'x'.repeat(300*1024));
+`);
+  chmodSync(executable, 0o700);
+  const oldPath = process.env.PATH;
+  try {
+    process.env.PATH = `${directory}:${oldPath}`;
+    const result = await getContainerLogs(first);
+    assert.equal(result.truncated, true);
+    assert.ok(Buffer.byteLength(result.text) <= 256 * 1024);
+    assert.doesNotMatch(result.text, /\x1b/);
+  } finally {
+    process.env.PATH = oldPath;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

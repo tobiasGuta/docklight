@@ -83,3 +83,23 @@ footer span { padding: 0 6px; }
 @media (max-width: 900px) { .overview { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 600px) { .overview { grid-template-columns: repeat(2, minmax(0, 1fr)); } .welcome-icon { display: none; } .inventory { padding: 15px; } .group-summary { flex-wrap: wrap; } }
 @media (max-width: 380px) { .overview { grid-template-columns: 1fr; } .read-only-badge { display: none; } }
+
+/* Phase 4: selected container details. All colors continue to use VS Code tokens. */
+.container-row { width: 100%; text-align: left; color: var(--dl-fg); border: 0; border-radius: 0; background: transparent; cursor: pointer; }
+.container-row:not(:disabled):hover, .container-row.selected { background: var(--vscode-list-hoverBackground, rgba(115,154,227,.09)); border-color: transparent; }
+.container-row.selected { box-shadow: inset 3px 0 var(--dl-accent); }
+.details-panel { border: 1px solid var(--dl-border); border-radius: 14px; padding: 24px; display: grid; gap: 16px; }
+.details-panel .eyebrow { margin-bottom: 8px; }
+.details-panel h2 { overflow-wrap: anywhere; font-size: 20px; }
+.details-panel h3 { margin: 0; font-size: 15px; }
+.detail-grid { display: grid; grid-template-columns: minmax(100px, 160px) minmax(0,1fr); gap: 12px 18px; padding: 18px; margin: 0; border: 1px solid var(--dl-border); border-radius: 11px; background: var(--dl-card); font-size: 12px; }
+.detail-grid dt { color: var(--dl-muted); }
+.detail-grid dd { margin: 0; overflow-wrap: anywhere; user-select: text; }
+.details-section { border-top: 1px solid var(--dl-border); padding-top: 16px; display: grid; gap: 13px; }
+.details-section .inventory-heading { flex-wrap: wrap; }
+.resource-cards { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
+.resource-cards .metric { min-height: 105px; }
+.resource-cards .metric strong { font-size: clamp(18px, 2.5vw, 28px); line-height: 1.5; overflow-wrap: anywhere; }
+.logs-output { margin: 0; padding: 16px; max-height: 340px; overflow: auto; background: var(--vscode-textCodeBlock-background, var(--dl-card)); border: 1px solid var(--dl-border); border-radius: 10px; font-family: var(--vscode-editor-font-family, monospace); font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+#logs-status { line-height: 1.5; overflow-wrap: anywhere; }
+@media (max-width: 600px) { .details-panel { padding: 15px; } .detail-grid { grid-template-columns: 1fr; gap: 4px; } .detail-grid dd { margin-bottom: 11px; } .resource-cards { grid-template-columns: 1fr; } }

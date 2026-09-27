@@ -256,3 +256,108 @@ export async function getInventory(run: DockerRunner = runDocker, signal?: Abort
     capturedAt: new Date().toISOString(),
   };
 }
+
+/** Phase 4 only inspects IDs from the last validated global inventory. */
+export function isFullContainerId(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
+}
+
+export interface ContainerStats {
+  cpuPercent: string;
+  memoryUsage: string;
+  memoryPercent: string;
+  capturedAt: string;
+}
+
+function statField(value: unknown, field: string): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 100) {
+    throw new Error('Docker returned an invalid ' + field + ' statistic.');
+  }
+  return value;
+}
+
+/** Single sample, only for a selected running container. No historical metrics. */
+export async function getContainerStats(
+  id: string,
+  run: DockerRunner = runDocker,
+  signal?: AbortSignal,
+): Promise<ContainerStats> {
+  if (!isFullContainerId(id)) throw new Error('Invalid container ID.');
+  const rows = parseJsonLines(await run(['container', 'stats', '--no-stream', '--format', 'json', id], signal));
+  if (rows.length !== 1) throw new Error('No statistics returned (the container may have stopped).');
+  const stats = record(rows[0]);
+  return {
+    cpuPercent: statField(stats.CPUPerc, 'CPU'),
+    memoryUsage: statField(stats.MemUsage, 'memory usage'),
+    memoryPercent: statField(stats.MemPerc, 'memory percent'),
+    capturedAt: new Date().toISOString(),
+  };
+}
+
+export interface ContainerLogs {
+  text: string;
+  truncated: boolean;
+}
+
+const MAX_LOG_BYTES = 256 * 1024;
+const LOG_TIMEOUT_MS = 8_000;
+
+/**
+ * No follow or stdin. Docker may write logs to stdout and stderr; capture both with a
+ * combined cap and kill on overflow. Their cross-stream ordering is not guaranteed.
+ * Never fetch or persist logs without an explicit request from the Webview.
+ */
+export function getContainerLogs(id: string, signal?: AbortSignal): Promise<ContainerLogs> {
+  if (!isFullContainerId(id)) return Promise.reject(new Error('Invalid container ID.'));
+  return new Promise((resolve, reject) => {
+    const { DOCKER_HOST: _host, DOCKER_CONTEXT: _context, ...environment } = process.env;
+    const child = spawn('docker', [
+      '--host', DOCKER_HOST, 'container', 'logs', '--tail', '200', '--timestamps', id,
+    ], {
+      shell: false,
+      cwd: '/',
+      env: environment,
+      signal,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const chunks: Buffer[] = [];
+    const errors: Buffer[] = [];
+    let size = 0;
+    let errorSize = 0;
+    let truncated = false;
+    let failure: Error | undefined;
+    const timer = setTimeout(() => {
+      failure ??= new Error('Docker log request timed out.');
+      child.kill('SIGKILL');
+    }, LOG_TIMEOUT_MS);
+    const capture = (part: Buffer, stderr: boolean): void => {
+      if (stderr && errorSize < MAX_STDERR_BYTES) {
+        errors.push(part.subarray(0, MAX_STDERR_BYTES - errorSize));
+        errorSize += part.length;
+      }
+      const remaining = MAX_LOG_BYTES - size;
+      if (remaining > 0) chunks.push(part.subarray(0, remaining));
+      size += part.length;
+      if (size > MAX_LOG_BYTES && !truncated) {
+        truncated = true;
+        child.kill('SIGKILL');
+      }
+    };
+    child.stdout.on('data', (part: Buffer) => capture(part, false));
+    child.stderr.on('data', (part: Buffer) => capture(part, true));
+    child.on('error', (error: Error) => { failure ??= error; });
+    child.on('close', (exitCode) => {
+      clearTimeout(timer);
+      if (failure) return reject(failure);
+      if (exitCode !== 0 && !truncated) {
+        const detail = Buffer.concat(errors).toString('utf8').trim();
+        return reject(new Error(detail || 'Docker logs exited with code ' + String(exitCode) + '.'));
+      }
+      // Plain-text rendering is still mandatory; strip terminal control sequences as defense in depth.
+      const text = Buffer.concat(chunks).toString('utf8')
+        .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '')
+        .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+      return resolve({ text, truncated });
+    });
+  });
+}

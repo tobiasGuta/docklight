@@ -29,7 +29,7 @@ class FakeElement {
 function setup() {
   const sent = [];
   const listeners = {};
-  const ids = ['extension-status', 'status-detail', 'error-message', 'empty-message', 'groups', 'refresh', 'search', 'filter', 'count-running', 'count-stopped', 'count-images', 'count-networks', 'count-volumes', 'container-total'];
+  const ids = ['extension-status', 'status-detail', 'error-message', 'empty-message', 'groups', 'refresh', 'search', 'filter', 'count-running', 'count-stopped', 'count-images', 'count-networks', 'count-volumes', 'container-total', 'details-panel', 'detail-fields', 'close-details', 'load-logs', 'logs-status', 'logs-output', 'stats-status', 'details-heading', 'details-subtitle', 'stat-cpu', 'stat-memory', 'stat-memory-percent'];
   const elements = Object.fromEntries(ids.map((id) => [id, new FakeElement()]));
   elements.filter.value = 'all';
   const document = {
@@ -105,4 +105,28 @@ test('failures show diagnostics as text and preserve last successful snapshot', 
   assert.equal(app.elements.groups.children.length, 2);
   app.receive({ type: 'mutate', command: 'remove' });
   assert.equal(app.sent.length, 1);
+});
+
+test('selected details and bounded log text render safely, never auto-request logs', () => {
+  const app = setup();
+  app.receive({ type: 'inventory', snapshot: snapshot() });
+  const firstRow = walk(app.elements.groups).find((item) => item.className === 'container-row');
+  firstRow.fire('click');
+  assert.equal(app.sent.at(-1).type, 'select');
+  assert.equal(app.elements['details-panel'].hidden, false);
+  assert.equal(app.elements['details-heading'].textContent, '<img src=x onerror=alert(1)>');
+  assert.equal(app.elements['detail-fields'].children.find((item) => item.textContent === 'Health').tag, 'dt');
+  assert.equal(app.sent.filter((item) => item.type === 'loadLogs').length, 0);
+  app.receive({ type: 'stats', id: 'a'.repeat(64), stats: { cpuPercent: '0.1%', memoryUsage: '15MiB / 1GiB', memoryPercent: '1.5%', capturedAt: '2026-09-26T21:00:00Z' } });
+  assert.equal(app.elements['stat-cpu'].textContent, '0.1%');
+  app.elements['load-logs'].fire('click');
+  assert.equal(app.sent.at(-1).type, 'loadLogs');
+  app.receive({ type: 'logs', id: 'a'.repeat(64), logs: { text: '<script>do not run</script>', truncated: true } });
+  assert.equal(app.elements['logs-output'].textContent, '<script>do not run</script>');
+  assert.match(app.elements['logs-status'].textContent, /truncated/);
+  app.receive({ type: 'logs', id: 'b'.repeat(64), logs: { text: 'other container', truncated: false } });
+  assert.equal(app.elements['logs-output'].textContent, '<script>do not run</script>');
+  app.elements['close-details'].fire('click');
+  assert.equal(app.elements['details-panel'].hidden, true);
+  assert.equal(app.sent.at(-1).type, 'clearSelection');
 });

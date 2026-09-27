@@ -10,9 +10,17 @@ const groupsElement = document.getElementById('groups');
 const refreshButton = document.getElementById('refresh');
 const searchInput = document.getElementById('search');
 const filterSelect = document.getElementById('filter');
+const detailsPanel = document.getElementById('details-panel');
+const fieldsElement = document.getElementById('detail-fields');
+const closeDetailsButton = document.getElementById('close-details');
+const logsButton = document.getElementById('load-logs');
+const logsStatus = document.getElementById('logs-status');
+const logsOutput = document.getElementById('logs-output');
+const statsStatus = document.getElementById('stats-status');
 
 let snapshot = null;
 let loading = false;
+let selectedId = null;
 const collapsedGroups = new Set();
 
 function element(tag, className, value) {
@@ -61,7 +69,12 @@ function matches(container, search, filter) {
 }
 
 function makeContainerRow(container) {
-  const row = element('article', 'container-row');
+  const row = element('button', 'container-row');
+  row.type = 'button';
+  row.setAttribute('aria-pressed', String(selectedId === container.id));
+  row.setAttribute('aria-label', `View details for ${container.name}`);
+  if (selectedId === container.id) row.className += ' selected';
+  row.addEventListener('click', () => selectContainer(container.id));
   const top = element('div', 'container-top');
   const nameWrap = element('div', 'container-name-wrap');
   const mark = element('span', 'container-mark', '▣');
@@ -93,6 +106,74 @@ function makeContainerRow(container) {
   }
   row.append(facts);
   return row;
+}
+
+function selectedContainer() {
+  return snapshot?.containers.find((container) => container.id === selectedId);
+}
+
+function clearDetailView() {
+  selectedId = null;
+  detailsPanel.hidden = true;
+  fieldsElement.replaceChildren();
+  logsOutput.textContent = '';
+  logsOutput.hidden = true;
+  logsStatus.textContent = 'Logs are never loaded automatically.';
+  logsButton.disabled = false;
+  statsStatus.textContent = 'Waiting for statistics…';
+  document.getElementById('stat-cpu').textContent = '—';
+  document.getElementById('stat-memory').textContent = '—';
+  document.getElementById('stat-memory-percent').textContent = '—';
+}
+
+function selectContainer(id) {
+  const container = snapshot?.containers.find((item) => item.id === id);
+  if (!container || selectedId === id) return;
+  selectedId = id;
+  logsOutput.textContent = '';
+  logsOutput.hidden = true;
+  logsStatus.textContent = 'Logs are never loaded automatically.';
+  logsButton.disabled = false;
+  statsStatus.textContent = container.state === 'running' ? 'Reading resource statistics…' : 'Container is not running.';
+  document.getElementById('stat-cpu').textContent = '—';
+  document.getElementById('stat-memory').textContent = '—';
+  document.getElementById('stat-memory-percent').textContent = '—';
+  renderDetails();
+  render();
+  vscode.postMessage({ type: 'select', id });
+}
+
+function appendField(label, value) {
+  fieldsElement.append(element('dt', '', label), element('dd', '', value));
+}
+
+function renderDetails() {
+  const container = selectedContainer();
+  if (!container) {
+    clearDetailView();
+    return;
+  }
+  detailsPanel.hidden = false;
+  document.getElementById('details-heading').textContent = container.name;
+  document.getElementById('details-subtitle').textContent = container.image;
+  fieldsElement.replaceChildren();
+  appendField('Full ID', container.id);
+  appendField('State', displayState(container));
+  appendField('Image', container.image);
+  appendField('Compose project', container.project || 'Standalone');
+  appendField('Compose service', container.service || '—');
+  appendField('Health', container.health || 'No health check');
+  appendField('Uptime', container.state === 'running' && container.startedAt ? formatUptime(container.startedAt) : 'Not running');
+  appendField('Published ports', container.publishedPorts.length ? container.publishedPorts.map((port) => {
+    const host = port.hostIp.includes(':') ? `[${port.hostIp}]` : (port.hostIp || '*');
+    return `${host}:${port.hostPort} → ${port.containerPort}`;
+  }).join(' · ') : 'None');
+  if (container.state !== 'running') {
+    statsStatus.textContent = 'Container is not running.';
+    document.getElementById('stat-cpu').textContent = '—';
+    document.getElementById('stat-memory').textContent = '—';
+    document.getElementById('stat-memory-percent').textContent = '—';
+  }
 }
 
 function render() {
@@ -155,6 +236,19 @@ refreshButton.addEventListener('click', () => {
   statusElement.textContent = 'Refreshing local Docker inventory…';
   vscode.postMessage({ type: 'refresh' });
 });
+closeDetailsButton.addEventListener('click', () => {
+  clearDetailView();
+  render();
+  vscode.postMessage({ type: 'clearSelection' });
+});
+logsButton.addEventListener('click', () => {
+  if (!selectedContainer() || logsButton.disabled) return;
+  logsButton.disabled = true;
+  logsStatus.textContent = 'Loading a bounded log snapshot…';
+  logsOutput.hidden = true;
+  logsOutput.textContent = '';
+  vscode.postMessage({ type: 'loadLogs' });
+});
 searchInput.addEventListener('input', render);
 filterSelect.addEventListener('change', render);
 
@@ -180,6 +274,7 @@ window.addEventListener('message', (event) => {
     setCount('count-volumes', counts.volumes);
     setCount('container-total', counts.containers);
     detailElement.textContent = `Updated ${new Date(snapshot.capturedAt).toLocaleTimeString()} · All workspaces · Manual refresh`;
+    if (selectedId) renderDetails();
     render();
   } else if (message.type === 'error' && typeof message.message === 'string') {
     setLoading(false);
@@ -188,6 +283,40 @@ window.addEventListener('message', (event) => {
     statusElement.textContent = 'Could not refresh local Docker inventory';
     detailElement.textContent = snapshot ? 'Showing the last successful snapshot.' : 'Check that Docker Engine is running and your user has socket access.';
     render();
+  } else if (message.type === 'selectionCleared') {
+    clearDetailView();
+    render();
+  } else if (selectedId && message.id === selectedId) {
+    if (message.type === 'statsLoading') {
+      statsStatus.textContent = 'Reading resource statistics…';
+    } else if (message.type === 'stats' && message.stats) {
+      document.getElementById('stat-cpu').textContent = message.stats.cpuPercent;
+      document.getElementById('stat-memory').textContent = message.stats.memoryUsage;
+      document.getElementById('stat-memory-percent').textContent = message.stats.memoryPercent;
+      statsStatus.textContent = `Updated ${new Date(message.stats.capturedAt).toLocaleTimeString()} · 10s refresh while visible`;
+    } else if (message.type === 'statsUnavailable') {
+      document.getElementById('stat-cpu').textContent = '—';
+      document.getElementById('stat-memory').textContent = '—';
+      document.getElementById('stat-memory-percent').textContent = '—';
+      statsStatus.textContent = message.message;
+    } else if (message.type === 'logsLoading') {
+      logsButton.disabled = true;
+      logsStatus.textContent = 'Loading a bounded log snapshot…';
+      logsOutput.hidden = true;
+    } else if (message.type === 'logs' && message.logs) {
+      logsButton.disabled = false;
+      logsOutput.hidden = false;
+      logsOutput.textContent = message.logs.text || '(No log entries returned.)';
+      logsStatus.textContent = message.logs.truncated
+        ? 'Output truncated at 256 KiB. Showing the captured portion.'
+        : 'Latest 200 log entries · manual refresh only · may contain secrets';
+      logsButton.textContent = 'Refresh logs';
+    } else if (message.type === 'logsError') {
+      logsButton.disabled = false;
+      logsOutput.hidden = true;
+      logsOutput.textContent = '';
+      logsStatus.textContent = `Logs unavailable: ${message.message}`;
+    }
   }
 });
 

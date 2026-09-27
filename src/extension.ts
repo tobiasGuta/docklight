@@ -1,10 +1,11 @@
 import * as vscode from 'vscode';
 import { randomBytes } from 'node:crypto';
-import { getInventory } from './docker';
+import { getContainerLogs, getContainerStats, getInventory, type InventorySnapshot } from './docker';
 import { parseWebviewMessage } from './protocol';
 
 let dashboardPanel: vscode.WebviewPanel | undefined;
-let activeController: AbortController | undefined;
+let cleanupPanel: (() => void) | undefined;
+const STATS_INTERVAL_MS = 10_000;
 
 export function activate(context: vscode.ExtensionContext): void {
   const openDashboard = vscode.commands.registerCommand('docklight.openDashboard', () => {
@@ -12,47 +13,127 @@ export function activate(context: vscode.ExtensionContext): void {
       dashboardPanel.reveal(vscode.ViewColumn.Active);
       return;
     }
-
     const panel = vscode.window.createWebviewPanel(
-      'docklight.dashboard',
-      'Docklight',
-      vscode.ViewColumn.Active,
+      'docklight.dashboard', 'Docklight', vscode.ViewColumn.Active,
       {
         enableScripts: true,
         retainContextWhenHidden: false,
         localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')],
       },
     );
-
     dashboardPanel = panel;
     let disposed = false;
+    let inventory: InventorySnapshot | undefined;
+    let inventoryController: AbortController | undefined;
     let pendingRefresh = false;
+    let selectedId: string | undefined;
+    let statsController: AbortController | undefined;
+    let logsController: AbortController | undefined;
+    let statsTimer: ReturnType<typeof setTimeout> | undefined;
 
-    const refresh = async (): Promise<void> => {
-      if (disposed) {
+    const stopSelectedWork = (): void => {
+      if (statsTimer) clearTimeout(statsTimer);
+      statsTimer = undefined;
+      statsController?.abort();
+      statsController = undefined;
+      logsController?.abort();
+      logsController = undefined;
+    };
+    const currentContainer = () => inventory?.containers.find((item) => item.id === selectedId);
+    const canSend = (id: string, signal: AbortSignal): boolean =>
+      !disposed && panel.visible && !signal.aborted && selectedId === id;
+
+    const requestStats = async (): Promise<void> => {
+      const container = currentContainer();
+      if (disposed || !panel.visible || !container || statsController) return;
+      if (container.state !== 'running') {
+        void panel.webview.postMessage({ type: 'statsUnavailable', id: container.id, message: 'Container is not running.' });
         return;
       }
-      if (activeController) {
-        if (activeController.signal.aborted) pendingRefresh = true;
+      const id = container.id;
+      const controller = new AbortController();
+      statsController = controller;
+      void panel.webview.postMessage({ type: 'statsLoading', id });
+      try {
+        const stats = await getContainerStats(id, undefined, controller.signal);
+        if (canSend(id, controller.signal)) void panel.webview.postMessage({ type: 'stats', id, stats });
+      } catch (error) {
+        if (canSend(id, controller.signal)) {
+          void panel.webview.postMessage({ type: 'statsUnavailable', id, message: error instanceof Error ? error.message : 'Stats unavailable.' });
+        }
+      } finally {
+        if (statsController === controller) statsController = undefined;
+        if (canSend(id, controller.signal) && currentContainer()?.state === 'running') {
+          // Schedule *after* the previous sample settles; never overlap subprocesses.
+          statsTimer = setTimeout(() => { statsTimer = undefined; void requestStats(); }, STATS_INTERVAL_MS);
+        }
+      }
+    };
+
+    const selectContainer = (id: string): void => {
+      // Format is checked in the parser. Membership prevents forged messages from inspecting
+      // arbitrary local containers outside our current inventory.
+      if (!inventory?.containers.some((item) => item.id === id) || disposed || !panel.visible) return;
+      if (selectedId === id) return;
+      stopSelectedWork();
+      selectedId = id;
+      void requestStats();
+    };
+
+    const loadLogs = async (): Promise<void> => {
+      const container = currentContainer();
+      if (!container || disposed || !panel.visible || logsController) return;
+      const id = container.id;
+      const controller = new AbortController();
+      logsController = controller;
+      void panel.webview.postMessage({ type: 'logsLoading', id });
+      try {
+        const logs = await getContainerLogs(id, controller.signal);
+        if (canSend(id, controller.signal)) void panel.webview.postMessage({ type: 'logs', id, logs });
+      } catch (error) {
+        if (canSend(id, controller.signal)) {
+          void panel.webview.postMessage({ type: 'logsError', id, message: error instanceof Error ? error.message : 'Logs unavailable.' });
+        }
+      } finally {
+        if (logsController === controller) logsController = undefined;
+      }
+    };
+
+    const refresh = async (): Promise<void> => {
+      if (disposed || !panel.visible) return;
+      if (inventoryController) {
+        if (inventoryController.signal.aborted) pendingRefresh = true;
         return;
       }
       const controller = new AbortController();
-      activeController = controller;
+      inventoryController = controller;
       void panel.webview.postMessage({ type: 'loading' });
       try {
         const snapshot = await getInventory(undefined, controller.signal);
-        if (!disposed && !controller.signal.aborted && panel.visible) {
+        if (!disposed && panel.visible && !controller.signal.aborted) {
+          inventory = snapshot;
           void panel.webview.postMessage({ type: 'inventory', snapshot });
+          const current = currentContainer();
+          if (selectedId && !current) {
+            stopSelectedWork();
+            selectedId = undefined;
+            void panel.webview.postMessage({ type: 'selectionCleared' });
+          } else if (current && current.state !== 'running') {
+            if (statsTimer) clearTimeout(statsTimer);
+            statsTimer = undefined;
+            statsController?.abort();
+            statsController = undefined;
+            void panel.webview.postMessage({ type: 'statsUnavailable', id: current.id, message: 'Container is not running.' });
+          } else if (current && !statsController && !statsTimer) {
+            void requestStats();
+          }
         }
       } catch (error) {
-        if (!disposed && !controller.signal.aborted && panel.visible) {
-          const message = error instanceof Error ? error.message : 'Could not read the local Docker Engine.';
-          void panel.webview.postMessage({ type: 'error', message });
+        if (!disposed && panel.visible && !controller.signal.aborted) {
+          void panel.webview.postMessage({ type: 'error', message: error instanceof Error ? error.message : 'Could not read the local Docker Engine.' });
         }
       } finally {
-        if (activeController === controller) {
-          activeController = undefined;
-        }
+        if (inventoryController === controller) inventoryController = undefined;
         if (pendingRefresh && !disposed && panel.visible) {
           pendingRefresh = false;
           void refresh();
@@ -62,41 +143,65 @@ export function activate(context: vscode.ExtensionContext): void {
 
     const messageSubscription = panel.webview.onDidReceiveMessage((raw: unknown) => {
       const message = parseWebviewMessage(raw);
-      if (message?.type === 'ready' || message?.type === 'refresh') {
-        void refresh();
+      if (!message) return;
+      switch (message.type) {
+        case 'ready':
+          stopSelectedWork();
+          selectedId = undefined;
+          void refresh();
+          break;
+        case 'refresh':
+          void refresh();
+          break;
+        case 'select':
+          selectContainer(message.id);
+          break;
+        case 'clearSelection':
+          stopSelectedWork();
+          selectedId = undefined;
+          break;
+        case 'loadLogs':
+          void loadLogs();
+          break;
       }
     });
-
     const stateSubscription = panel.onDidChangeViewState(() => {
       if (!panel.visible) {
-        activeController?.abort();
+        inventoryController?.abort();
+        stopSelectedWork();
+        selectedId = undefined;
       } else {
         void refresh();
       }
     });
-
     const disposeSubscription = panel.onDidDispose(() => {
       disposed = true;
-      activeController?.abort();
-      if (dashboardPanel === panel) {
-        dashboardPanel = undefined;
-      }
+      pendingRefresh = false;
+      inventoryController?.abort();
+      stopSelectedWork();
+      selectedId = undefined;
+      if (dashboardPanel === panel) dashboardPanel = undefined;
+      cleanupPanel = undefined;
       messageSubscription.dispose();
       stateSubscription.dispose();
       disposeSubscription.dispose();
     });
-
-    // Listen before loading HTML: the ready handshake must not race registration.
+    cleanupPanel = () => {
+      pendingRefresh = false;
+      inventoryController?.abort();
+      stopSelectedWork();
+    };
+    // Register listeners before loading HTML to avoid losing the ready handshake.
     panel.webview.html = createDashboardHtml(panel.webview, context.extensionUri);
   });
-
   context.subscriptions.push(openDashboard);
 }
 
 export function deactivate(): void {
-  activeController?.abort();
+  cleanupPanel?.();
   dashboardPanel?.dispose();
   dashboardPanel = undefined;
+  cleanupPanel = undefined;
 }
 
 function createDashboardHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
@@ -162,8 +267,24 @@ function createDashboardHtml(webview: vscode.Webview, extensionUri: vscode.Uri):
         <div id="groups" class="groups" aria-live="polite"></div>
         <p id="empty-message" class="empty-state">Waiting for container inventory…</p>
       </section>
+
+      <section class="details-panel" id="details-panel" aria-labelledby="details-heading" hidden>
+        <div class="inventory-heading"><div><span class="eyebrow">SELECTED CONTAINER · READ-ONLY</span><h2 id="details-heading">Container details</h2></div>
+          <button type="button" id="close-details" aria-label="Close container details">✕ Close</button></div>
+        <p id="details-subtitle" class="hint"></p>
+        <dl class="detail-grid" id="detail-fields"></dl>
+        <div class="details-section"><div class="inventory-heading"><h3>Resources</h3><span class="hint">Selected container · approximately every 10s while visible</span></div>
+          <p id="stats-status" class="hint" role="status">Waiting for statistics…</p>
+          <div class="resource-cards"><div class="metric"><span>CPU</span><strong id="stat-cpu">—</strong></div><div class="metric"><span>Memory</span><strong id="stat-memory">—</strong><small id="stat-memory-percent">—</small></div></div>
+        </div>
+        <div class="details-section"><div class="inventory-heading"><div><h3>Recent logs</h3><p class="hint">Last 200 lines · 256 KiB maximum · may contain secrets</p></div>
+          <button id="load-logs" type="button">Load recent logs</button></div>
+          <p id="logs-status" class="hint" role="status">Logs are never loaded automatically.</p>
+          <pre id="logs-output" class="logs-output" tabindex="0" hidden></pre>
+        </div>
+      </section>
     </main>
-    <footer>LOCAL UNIX SOCKET <span aria-hidden="true">·</span> NO TELEMETRY <span aria-hidden="true">·</span> READ-ONLY <span aria-hidden="true">·</span> MANUAL REFRESH</footer>
+    <footer>LOCAL UNIX SOCKET <span aria-hidden="true">·</span> NO TELEMETRY <span aria-hidden="true">·</span> READ-ONLY <span aria-hidden="true">·</span> BOUNDED MONITORING</footer>
   </div>
   <script nonce="${nonce}" src="${script}"></script>
 </body>
