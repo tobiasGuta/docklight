@@ -1,9 +1,17 @@
+# Package only compiled runtime and the bundled Webview. No source, test fixtures, or local data.
 .vscode/**
 src/**
 test/**
+scripts/**
 node_modules/**
-.gitignore
 .git/**
+.gitignore
+.vscodeignore
 tsconfig.json
+package-lock.json
 *.vsix
 *.log
+**/*.map
+**/.env
+**/.env.*
+**/.DS_Store

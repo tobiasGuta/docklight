@@ -277,9 +277,9 @@ function createDashboardHtml(webview: vscode.Webview, extensionUri: vscode.Uri):
           <p id="stats-status" class="hint" role="status">Waiting for statistics…</p>
           <div class="resource-cards"><div class="metric"><span>CPU</span><strong id="stat-cpu">—</strong></div><div class="metric"><span>Memory</span><strong id="stat-memory">—</strong><small id="stat-memory-percent">—</small></div></div>
         </div>
-        <div class="details-section"><div class="inventory-heading"><div><h3>Recent logs</h3><p class="hint">Last 200 lines · 256 KiB maximum · may contain secrets</p></div>
-          <button id="load-logs" type="button">Load recent logs</button></div>
-          <p id="logs-status" class="hint" role="status">Logs are never loaded automatically.</p>
+        <div class="details-section"><div class="inventory-heading"><div><h3>Recent logs</h3><p class="hint">Up to 200 lines · 256 KiB maximum · may contain secrets</p></div>
+          <div class="log-actions"><button id="wrap-logs" type="button" aria-pressed="false">Wrap lines: Off</button><button id="clear-logs" type="button" disabled>Clear view</button><button id="load-logs" type="button">Load recent logs</button></div></div>
+          <p id="logs-status" class="hint" role="status">Logs are never loaded automatically. Output may contain secrets.</p>
           <pre id="logs-output" class="logs-output" tabindex="0" hidden></pre>
         </div>
       </section>

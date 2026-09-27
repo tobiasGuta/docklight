@@ -16,6 +16,8 @@ const closeDetailsButton = document.getElementById('close-details');
 const logsButton = document.getElementById('load-logs');
 const logsStatus = document.getElementById('logs-status');
 const logsOutput = document.getElementById('logs-output');
+const clearLogsButton = document.getElementById('clear-logs');
+const wrapLogsButton = document.getElementById('wrap-logs');
 const statsStatus = document.getElementById('stats-status');
 
 let snapshot = null;
@@ -64,7 +66,9 @@ function matches(container, search, filter) {
   if (filter === 'stopped' && container.state === 'running') return false;
   if (filter === 'unhealthy' && container.health !== 'unhealthy') return false;
   const haystack = [container.name, container.image, container.project, container.service, container.state, container.health]
-    .filter((value) => typeof value === 'string').join(' ').toLowerCase();
+    .filter((value) => typeof value === 'string')
+    .concat(container.id, ...container.publishedPorts.map((port) => `${port.hostIp}:${port.hostPort} ${port.containerPort}`))
+    .join(' ').toLowerCase();
   return haystack.includes(search);
 }
 
@@ -118,7 +122,8 @@ function clearDetailView() {
   fieldsElement.replaceChildren();
   logsOutput.textContent = '';
   logsOutput.hidden = true;
-  logsStatus.textContent = 'Logs are never loaded automatically.';
+  logsStatus.textContent = 'Logs are never loaded automatically. Output may contain secrets.';
+  clearLogsButton.disabled = true;
   logsButton.disabled = false;
   statsStatus.textContent = 'Waiting for statistics…';
   document.getElementById('stat-cpu').textContent = '—';
@@ -132,7 +137,8 @@ function selectContainer(id) {
   selectedId = id;
   logsOutput.textContent = '';
   logsOutput.hidden = true;
-  logsStatus.textContent = 'Logs are never loaded automatically.';
+  logsStatus.textContent = 'Logs are never loaded automatically. Output may contain secrets.';
+  clearLogsButton.disabled = true;
   logsButton.disabled = false;
   statsStatus.textContent = container.state === 'running' ? 'Reading resource statistics…' : 'Container is not running.';
   document.getElementById('stat-cpu').textContent = '—';
@@ -141,6 +147,7 @@ function selectContainer(id) {
   renderDetails();
   render();
   vscode.postMessage({ type: 'select', id });
+  detailsPanel.scrollIntoView?.({ block: 'start' });
 }
 
 function appendField(label, value) {
@@ -186,6 +193,8 @@ function render() {
   const search = searchInput.value.trim().toLowerCase();
   const filter = filterSelect.value;
   const visible = snapshot.containers.filter((item) => matches(item, search, filter));
+  document.getElementById('container-total').textContent = search || filter !== 'all'
+    ? `${visible.length} / ${snapshot.containers.length}` : String(snapshot.containers.length);
   emptyElement.hidden = visible.length > 0;
   emptyElement.textContent = snapshot.containers.length === 0
     ? 'No containers found on the local Docker Engine.'
@@ -247,7 +256,20 @@ logsButton.addEventListener('click', () => {
   logsStatus.textContent = 'Loading a bounded log snapshot…';
   logsOutput.hidden = true;
   logsOutput.textContent = '';
+  clearLogsButton.disabled = true;
   vscode.postMessage({ type: 'loadLogs' });
+});
+clearLogsButton.addEventListener('click', () => {
+  logsOutput.textContent = '';
+  logsOutput.hidden = true;
+  clearLogsButton.disabled = true;
+  logsStatus.textContent = 'Log view cleared locally. Use Refresh logs to request a new snapshot.';
+});
+wrapLogsButton.addEventListener('click', () => {
+  const wrapped = logsOutput.className !== 'logs-output wrapped';
+  logsOutput.className = wrapped ? 'logs-output wrapped' : 'logs-output';
+  wrapLogsButton.textContent = wrapped ? 'Wrap lines: On' : 'Wrap lines: Off';
+  wrapLogsButton.setAttribute('aria-pressed', String(wrapped));
 });
 searchInput.addEventListener('input', render);
 filterSelect.addEventListener('change', render);
@@ -307,14 +329,16 @@ window.addEventListener('message', (event) => {
       logsButton.disabled = false;
       logsOutput.hidden = false;
       logsOutput.textContent = message.logs.text || '(No log entries returned.)';
+      clearLogsButton.disabled = false;
       logsStatus.textContent = message.logs.truncated
         ? 'Output truncated at 256 KiB. Showing the captured portion.'
-        : 'Latest 200 log entries · manual refresh only · may contain secrets';
+        : 'Up to 200 recent log lines · manual refresh only · may contain secrets';
       logsButton.textContent = 'Refresh logs';
     } else if (message.type === 'logsError') {
       logsButton.disabled = false;
       logsOutput.hidden = true;
       logsOutput.textContent = '';
+      clearLogsButton.disabled = true;
       logsStatus.textContent = `Logs unavailable: ${message.message}`;
     }
   }

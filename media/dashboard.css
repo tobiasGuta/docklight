@@ -100,6 +100,11 @@ footer span { padding: 0 6px; }
 .resource-cards { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
 .resource-cards .metric { min-height: 105px; }
 .resource-cards .metric strong { font-size: clamp(18px, 2.5vw, 28px); line-height: 1.5; overflow-wrap: anywhere; }
-.logs-output { margin: 0; padding: 16px; max-height: 340px; overflow: auto; background: var(--vscode-textCodeBlock-background, var(--dl-card)); border: 1px solid var(--dl-border); border-radius: 10px; font-family: var(--vscode-editor-font-family, monospace); font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.logs-output { margin: 0; padding: 16px; max-height: 380px; overflow: auto; background: var(--dl-bg); color: var(--dl-fg); border: 1px solid var(--dl-border); border-radius: 10px; font-family: var(--vscode-editor-font-family, monospace); font-size: 12px; line-height: 1.6; white-space: pre; overflow-wrap: normal; tab-size: 2; user-select: text; }
+.logs-output.wrapped { white-space: pre-wrap; overflow-wrap: anywhere; }
+.log-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+#clear-logs:disabled { cursor: not-allowed; }
+.details-panel { scroll-margin-top: 18px; }
+@media (max-width: 600px) { .log-actions { width: 100%; } .log-actions button { flex: 1 1 auto; } }
 #logs-status { line-height: 1.5; overflow-wrap: anywhere; }
 @media (max-width: 600px) { .details-panel { padding: 15px; } .detail-grid { grid-template-columns: 1fr; gap: 4px; } .detail-grid dd { margin-bottom: 11px; } .resource-cards { grid-template-columns: 1fr; } }

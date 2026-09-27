@@ -16,6 +16,7 @@ class FakeElement {
     this.disabled = false;
     this.dataset = {};
     this._text = '';
+    this.scrolled = false;
   }
   set textContent(value) { this._text = String(value); this.children = []; }
   get textContent() { return this._text + this.children.map((item) => item.textContent).join(''); }
@@ -23,13 +24,14 @@ class FakeElement {
   replaceChildren(...nodes) { this.children = [...nodes]; this._text = ''; }
   addEventListener(type, fn) { this.listeners[type] = fn; }
   setAttribute(name, value) { this[name] = value; }
+  scrollIntoView() { this.scrolled = true; }
   fire(type) { this.listeners[type]?.(); }
 }
 
 function setup() {
   const sent = [];
   const listeners = {};
-  const ids = ['extension-status', 'status-detail', 'error-message', 'empty-message', 'groups', 'refresh', 'search', 'filter', 'count-running', 'count-stopped', 'count-images', 'count-networks', 'count-volumes', 'container-total', 'details-panel', 'detail-fields', 'close-details', 'load-logs', 'logs-status', 'logs-output', 'stats-status', 'details-heading', 'details-subtitle', 'stat-cpu', 'stat-memory', 'stat-memory-percent'];
+  const ids = ['extension-status', 'status-detail', 'error-message', 'empty-message', 'groups', 'refresh', 'search', 'filter', 'count-running', 'count-stopped', 'count-images', 'count-networks', 'count-volumes', 'container-total', 'details-panel', 'detail-fields', 'close-details', 'load-logs', 'clear-logs', 'wrap-logs', 'logs-status', 'logs-output', 'stats-status', 'details-heading', 'details-subtitle', 'stat-cpu', 'stat-memory', 'stat-memory-percent'];
   const elements = Object.fromEntries(ids.map((id) => [id, new FakeElement()]));
   elements.filter.value = 'all';
   const document = {
@@ -129,4 +131,39 @@ test('selected details and bounded log text render safely, never auto-request lo
   app.elements['close-details'].fire('click');
   assert.equal(app.elements['details-panel'].hidden, true);
   assert.equal(app.sent.at(-1).type, 'clearSelection');
+});
+
+test('Phase 5: selection scrolls into view and search matches IDs and published ports', () => {
+  const app = setup();
+  app.receive({ type: 'inventory', snapshot: snapshot() });
+  app.elements.search.value = '5432';
+  app.elements.search.fire('input');
+  assert.equal(app.elements['container-total'].textContent, '1 / 2');
+  assert.equal(app.elements.groups.children.length, 1);
+  app.elements.search.value = '';
+  app.elements.search.fire('input');
+  const selected = walk(app.elements.groups).find((item) => item.className === 'container-row');
+  selected.fire('click');
+  assert.equal(app.elements['details-panel'].scrolled, true);
+  assert.equal(app.sent.at(-1).type, 'select');
+});
+
+test('Phase 5: wrapped logs and Clear view do not cause host operations', () => {
+  const app = setup();
+  app.receive({ type: 'inventory', snapshot: snapshot() });
+  walk(app.elements.groups).find((item) => item.className === 'container-row').fire('click');
+  assert.equal(app.elements['clear-logs'].disabled, true);
+  app.receive({ type: 'logs', id: 'a'.repeat(64), logs: { text: '<secret>\nraw', truncated: false } });
+  assert.equal(app.elements['clear-logs'].disabled, false);
+  app.elements['wrap-logs'].fire('click');
+  assert.equal(app.elements['logs-output'].className, 'logs-output wrapped');
+  assert.equal(app.elements['wrap-logs']['aria-pressed'], 'true');
+  const before = app.sent.length;
+  app.elements['clear-logs'].fire('click');
+  assert.equal(app.elements['logs-output'].textContent, '');
+  assert.equal(app.elements['logs-output'].hidden, true);
+  assert.equal(app.elements['clear-logs'].disabled, true);
+  assert.equal(app.sent.length, before);
+  app.elements['wrap-logs'].fire('click');
+  assert.equal(app.elements['logs-output'].className, 'logs-output');
 });

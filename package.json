@@ -1,17 +1,23 @@
 {
   "name": "docklight",
   "displayName": "Docklight",
-  "description": "A lightweight, read-only Docker dashboard for Visual Studio Code.",
-  "version": "0.3.0",
+  "description": "Private, read-only local Docker dashboard for Visual Studio Code.",
+  "version": "0.4.0",
   "publisher": "tobiasGuta",
   "private": true,
   "license": "UNLICENSED",
   "engines": {
     "vscode": "^1.96.0"
   },
-  "categories": ["Other"],
-  "extensionKind": ["ui"],
-  "activationEvents": ["onCommand:docklight.openDashboard"],
+  "categories": [
+    "Other"
+  ],
+  "extensionKind": [
+    "ui"
+  ],
+  "activationEvents": [
+    "onCommand:docklight.openDashboard"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
@@ -26,12 +32,21 @@
     "compile": "tsc -p .",
     "check": "tsc --noEmit -p .",
     "test": "npm run compile && node --test test/*.test.mjs",
-    "package": "vsce package --no-dependencies"
+    "verify": "npm test && node scripts/check-release.mjs",
+    "package": "npm run verify && vsce package --no-dependencies --skip-license && node scripts/verify-vsix.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/vscode": "^1.96.0",
     "@vscode/vsce": "^3.6.0",
     "typescript": "^5.8.3"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tobiasGuta/docklight.git"
+  },
+  "files": [
+    "out/**",
+    "media/**"
+  ]
 }
