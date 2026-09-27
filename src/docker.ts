@@ -16,6 +16,7 @@ export const INSPECT_TEMPLATE = [
   '"image":{{json .Config.Image}}',
   '"state":{{json .State.Status}}',
   '"startedAt":{{json .State.StartedAt}}',
+  // Health may be absent entirely on containers without a HEALTHCHECK; use index.
   '"health":{{with index .State "Health"}}{{json .Status}}{{else}}""{{end}}',
   '"ports":{{json .NetworkSettings.Ports}}',
   '"project":{{with .Config.Labels}}{{with index . "com.docker.compose.project"}}{{json .}}{{else}}""{{end}}{{else}}""{{end}}',
