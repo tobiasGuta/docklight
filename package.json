@@ -47,6 +47,7 @@
   },
   "files": [
     "out/**",
-    "media/**"
+    "media/**",
+    "README.md"
   ]
 }

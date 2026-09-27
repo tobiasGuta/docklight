@@ -33,7 +33,7 @@ npm run package
 code --install-extension ./docklight-0.4.0.vsix --force
 ```
 
-The packaging command compiles, runs automated tests and release assertions, invokes the official `@vscode/vsce` packager, then uses `unzip` to verify the VSIX contains the extension manifest and runtime files and **does not contain source, tests, node_modules, logs, or environment files**. `npm install` installs build tooling only; the installed extension has no npm runtime dependencies. `unzip` is a packaging-check utility, not an extension runtime requirement. If it isn't installed: `sudo dnf install unzip`.
+Packaging uses the single `package.json` `files` allowlist (no `.vscodeignore`) so the compiled `out/`, packaged Webview assets, and README are included without shipping development files. The packaging command compiles, runs automated tests and release assertions, invokes the official `@vscode/vsce` packager, then uses `unzip` to verify the VSIX contains the extension manifest and runtime files and **does not contain source, tests, node_modules, logs, or environment files**. `npm install` installs build tooling only; the installed extension has no npm runtime dependencies. `unzip` is a packaging-check utility, not an extension runtime requirement. If it isn't installed: `sudo dnf install unzip`.
 
 To see the installed version:
 

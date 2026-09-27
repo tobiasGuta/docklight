@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 
 const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 assert.equal(manifest.name, 'docklight');
@@ -7,7 +7,9 @@ assert.match(manifest.version, /^\d+\.\d+\.\d+$/);
 assert.equal(manifest.private, true);
 assert.equal(manifest.main, './out/extension.js');
 assert.deepEqual(manifest.extensionKind, ['ui']);
-assert.deepEqual(manifest.files, ['out/**', 'media/**']);
+assert.deepEqual(manifest.files, ['out/**', 'media/**', 'README.md']);
+assert.equal(existsSync(new URL('../.vscodeignore', import.meta.url)), false,
+  'Choose one VSCE packaging strategy: package.json files allowlist OR .vscodeignore, never both.');
 assert.equal(manifest.dependencies, undefined, 'No runtime dependencies should be packaged.');
 assert.ok(manifest.contributes.commands.some((command) => command.command === 'docklight.openDashboard'));
 for (const filename of ['out/extension.js', 'out/docker.js', 'out/protocol.js', 'media/dashboard.css', 'media/dashboard.js', 'README.md']) {
